@@ -1,0 +1,34 @@
+# Local build products
+/build/
+/work/
+/target/build/
+*.o
+*.a
+*.elf
+*.map
+*.bin
+*.sansa
+*.codec
+*.rock
+*.zip
+
+# Device/update material (never commit private or installable artifacts)
+/outputs/clipplus-focus-update/
+/outputs/clipplus-alpha-package/
+/work/device-backups/
+/work/*toolchain*/
+/work/*-build*/
+/work/rockbox-*/
+/work/mkamsboot*/
+
+# Simulator intermediates and OS/editor files
+*.pgm
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.idea/
+.vscode/
+
+# Local Git metadata for the separately managed Rockbox source checkout
+work/rockbox-focus-fork/.git

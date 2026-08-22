@@ -1,0 +1,23 @@
+/* Layout-only linker script derived from the authorized AS3525v2 reference.
+ * It is not a verified boot script and must not be flashed. */
+ENTRY(clipplus_target_entry)
+OUTPUT_FORMAT(elf32-littlearm)
+OUTPUT_ARCH(arm)
+
+MEMORY
+{
+    IRAM (rwx) : ORIGIN = 0x30800000, LENGTH = 0x00050000
+    DRAM (rwx) : ORIGIN = 0x30000000, LENGTH = 0x007FC000
+}
+
+SECTIONS
+{
+    .vectors 0x30000000 : { KEEP(*(.init.text)) } > DRAM
+    .text : { *(.text*) *(.glue_7) *(.glue_7t) } > DRAM
+    .rodata : { *(.rodata*) } > DRAM
+    .data : { *(.data*) } > DRAM
+    .iram : { *(.icode*) *(.irodata*) *(.idata*) } > IRAM AT> DRAM
+    .bss (NOLOAD) : { *(.bss*) *(COMMON) } > DRAM
+    .stack (NOLOAD) : { . = ALIGN(8); __stack_start = .; . += 0x2000; __stack_end = .; } > IRAM
+    /DISCARD/ : { *(.eh_frame) }
+}

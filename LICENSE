@@ -1,0 +1,15 @@
+Focus Clip+ Firmware
+Copyright (C) 2026 Darren Fernandez
+
+The original source and project-original additions in this repository are
+licensed under the GNU General Public License, version 2 or (at your option)
+any later version (GPL-2.0-or-later).
+
+This repository also documents and builds a modified Rockbox source tree.
+Rockbox source remains covered by its original copyright and license notices;
+those notices are not replaced by this file. See NOTICE.md and
+docs/opensource.md for the complete provenance and corresponding-source
+instructions.
+
+The authoritative GPL-2.0-or-later text is available from the Free Software
+Foundation at https://www.gnu.org/licenses/old-licenses/gpl-2.0.html.
