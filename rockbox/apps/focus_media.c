@@ -1,352 +1,513 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* Focus-player media screens.  These deliberately do not enter Rockbox's
- * tree or WPS screens: the shell owns the complete first-pass interaction. */
+/* Folder browser and Now Playing for the Clip+ focus shell.
+ * Project-original fork code. Playback uses the same playlist calls as
+ * Rockbox's own file browser (create, insert context, shuffle, start). */
 #include "config.h"
-#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <string-extra.h>
 #include "action.h"
 #include "audio.h"
 #include "dir.h"
 #include "filetypes.h"
-#include "font.h"
-#include "focus_font.h"
+#include "kernel.h"
 #include "lcd.h"
 #include "metadata.h"
 #include "misc.h"
+#include "playback.h"
 #include "playlist.h"
-#include "kernel.h"
 #include "settings.h"
-#include "status.h"
-#include "sound.h"
-#include "screens.h"
+#include "strnatcmp.h"
 #include "recorder/recording.h"
-#include "radio/radio.h"
-#include "alarm_menu.h"
+#include "focus_ui.h"
 
-#define FOCUS_MEDIA_MAX 32
+bool focus_recording_screen(void); /* apps/recorder/recording.c */
 
-static char media_paths[FOCUS_MEDIA_MAX][MAX_PATH];
-static char media_names[FOCUS_MEDIA_MAX][MAX_PATH];
-static int media_count;
-static int media_selected;
+#define MEDIA_MAX   400
+#define MEDIA_POOL  16384
+#define MEDIA_DEPTH 8
 
-static void upper_copy(char *dst, size_t size, const char *src)
+static char media_pool[MEDIA_POOL];
+static unsigned short media_off[MEDIA_MAX];
+static unsigned char media_is_dir[MEDIA_MAX];
+static short media_order[MEDIA_MAX];
+static int media_count, media_files;
+static char media_dir[MAX_PATH];
+static bool media_recordings;
+
+/* ------------------------------------------------------------ names ---- */
+
+void focus_pretty_name(char *dst, size_t size, const char *filename)
 {
-    size_t i;
-    if (!size) return;
-    for (i = 0; i + 1 < size && src[i]; ++i)
-        dst[i] = (char)toupper((unsigned char)src[i]);
-    dst[i] = '\0';
+    const char *base = strrchr(filename, '/');
+    char *dot, *p, *out;
+    bool has_space;
+
+    base = base ? base + 1 : filename;
+    strlcpy(dst, base, size);
+    dot = strrchr(dst, '.');
+    if (dot && dot != dst)
+        *dot = '\0';
+    has_space = strchr(dst, ' ') != NULL;
+    for (p = dst; *p; p++)
+        if (*p == '_' || (*p == '-' && !has_space))
+            *p = ' ';
+    /* collapse runs of spaces */
+    for (p = out = dst; *p; p++)
+        if (*p != ' ' || (out > dst && out[-1] != ' '))
+            *out++ = *p;
+    *out = '\0';
 }
 
-static void short_name(char *dst, size_t size, const char *path)
+static const char *entry_name(int entry)
 {
-    const char *name = strrchr(path, '/');
-    char temp[MAX_PATH];
-    char *dot;
-    name = name ? name + 1 : path;
-    upper_copy(temp, sizeof(temp), name);
-    dot = strrchr(temp, '.');
-    if (dot) *dot = '\0';
-    strlcpy(dst, temp, size);
+    return media_pool + media_off[entry];
 }
 
-static void draw_title(const char *title, int y)
+static void entry_path(int entry, char *buf, size_t size)
 {
-    char first[11], second[11];
-    size_t n = strlen(title);
-    memset(first, 0, sizeof(first));
-    memset(second, 0, sizeof(second));
-    strlcpy(first, title, sizeof(first));
-    if (n > 10) strlcpy(second, title + 10, sizeof(second));
-    focus_big_text_centered(first, y);
-    if (second[0]) focus_big_text_centered(second, y + 18);
+    strlcpy(buf, media_dir, size);
+    strlcat(buf, "/", size);
+    strlcat(buf, entry_name(entry), size);
 }
 
-static void media_draw(const char *heading, const char *message)
+static int media_compare(const void *a, const void *b)
 {
-    focus_screen_header(heading);
-    if (message) draw_title(message, 23);
-    lcd_update();
+    int ea = *(const short *)a, eb = *(const short *)b;
+    if (media_is_dir[ea] != media_is_dir[eb])
+        return media_is_dir[eb] - media_is_dir[ea];
+    return strnatcasecmp(entry_name(ea), entry_name(eb));
 }
 
-static bool media_scan(const char *folder)
+static bool media_scan(void)
 {
-    DIR *dir = opendir(folder);
+    DIR *dir = opendir(media_dir);
     struct dirent *entry;
-    media_count = 0;
-    media_selected = 0;
-    if (!dir) return false;
-    while (media_count < FOCUS_MEDIA_MAX && (entry = readdir(dir)))
+    size_t used = 0;
+
+    media_count = media_files = 0;
+    if (!dir)
+        return false;
+    while (media_count < MEDIA_MAX && (entry = readdir(dir)))
     {
         struct dirinfo info = dir_get_info(dir, entry);
-        char path[MAX_PATH];
-        int attr;
-        if (info.attribute & ATTR_DIRECTORY) continue;
-        snprintf(path, sizeof(path), "%s/%s", folder, entry->d_name);
-        attr = filetype_get_attr(path);
-        if (!filetype_supported(attr) || !(attr & FILE_ATTR_AUDIO)) continue;
-        strlcpy(media_paths[media_count], path, sizeof(media_paths[0]));
-        short_name(media_names[media_count], sizeof(media_names[0]), path);
-        ++media_count;
+        size_t len = strlen(entry->d_name) + 1;
+        bool is_dir = (info.attribute & ATTR_DIRECTORY) != 0;
+
+        if (entry->d_name[0] == '.' || used + len > MEDIA_POOL)
+            continue;
+        if (!is_dir)
+        {
+            int attr = filetype_get_attr(entry->d_name);
+            if ((attr & FILE_ATTR_MASK) != FILE_ATTR_AUDIO)
+                continue;
+            media_files++;
+        }
+        memcpy(media_pool + used, entry->d_name, len);
+        media_off[media_count] = (unsigned short)used;
+        media_is_dir[media_count] = is_dir;
+        media_order[media_count] = (short)media_count;
+        used += len;
+        media_count++;
     }
     closedir(dir);
+    qsort(media_order, media_count, sizeof(media_order[0]), media_compare);
     return true;
 }
 
-static void media_list_draw(const char *heading)
+/* --------------------------------------------------------- playback ---- */
+
+bool focus_playback_active(void)
 {
-    focus_screen_header(heading);
-    if (!media_count)
-        draw_title("EMPTY", 25);
+    return (audio_status() & AUDIO_STATUS_PLAY) != 0;
+}
+
+/* Short "what is on" text for the Home header; false when idle. */
+bool focus_playing_title(char *buf, size_t size)
+{
+    struct mp3entry *id3;
+    if (!focus_playback_active())
+        return false;
+    id3 = audio_current_track();
+    if (!id3 || !id3->path[0])
+        return false;
+    if (id3->title && id3->title[0])
+        strlcpy(buf, id3->title, size);
     else
-        draw_title(media_names[media_selected], 22);
-    lcd_set_drawmode(DRMODE_SOLID);
-    lcd_vline(3, 30, 35);
-    lcd_vline(LCD_WIDTH - 4, 30, 35);
-    focus_screen_position(media_selected, media_count);
-    lcd_update();
-}
-
-static void focus_now_playing_draw(struct mp3entry *id3, int status,
-                                   const char *feedback,
-                                   bool starting)
-{
-    char shown[MAX_PATH];
-    char time_text[32];
-    unsigned long elapsed = id3 ? id3->elapsed : 0;
-    unsigned long length = id3 ? id3->length : 0;
-    int width = 0;
-    const char *state = starting ? "STARTING" :
-                        ((status & AUDIO_STATUS_PAUSE) ? "PAUSED" : "PLAYING");
-    char section[16];
-
-    if (feedback)
-        strlcpy(section, feedback, sizeof(section));
-    else
-    {
-        strlcpy(section, "NOW PLAYING", sizeof(section));
-    }
-    focus_screen_header(section);
-    lcd_setfont(FONT_SYSFIXED);
-    lcd_putsxy(4, 14, state);
-    focus_screen_battery(82, 14);
-
-    {
-        const char *title = id3 && id3->title ? id3->title : "STARTING";
-        upper_copy(shown, sizeof(shown), title);
-    }
-    draw_title(shown, 16);
-    if (length)
-    {
-        if (elapsed > length) elapsed = length;
-        width = (int)(((LCD_WIDTH - 8) * elapsed) / length);
-    }
-    lcd_hline(4, LCD_WIDTH - 5, 49);
-    if (width > 0)
-        lcd_fillrect(4, 48, width, 3);
-    snprintf(time_text, sizeof(time_text), "%lu:%02lu -%lu:%02lu /%lu:%02lu",
-             elapsed / 60000, (elapsed / 1000) % 60,
-             (length > elapsed ? length - elapsed : 0) / 60000,
-             ((length > elapsed ? length - elapsed : 0) / 1000) % 60,
-             length / 60000, (length / 1000) % 60);
-    lcd_setfont(FONT_SYSFIXED);
-    lcd_putsxy(4, 55, time_text);
-    lcd_update();
-}
-
-static void focus_volume_overlay_draw(void)
-{
-    int min = sound_min(SOUND_VOLUME);
-    int max = sound_max(SOUND_VOLUME);
-    int value = global_status.volume;
-    int level = max > min ? (value - min) * 10 / (max - min) : 0;
-    char value_text[20];
-
-    if (level < 0) level = 0;
-    if (level > 10) level = 10;
-    focus_screen_header("VOLUME");
-    focus_big_text_centered("VOLUME", 15);
-    snprintf(value_text, sizeof(value_text), "%d", value);
-    focus_big_text_centered(value_text, 31);
-    for (int i = 0; i < 10; ++i)
-    {
-        int height = 4 + i * 4;
-        int x = 7 + i * 12;
-        if (i < level)
-            lcd_fillrect(x, 57 - height, 8, height);
-        else
-            lcd_drawrect(x, 57 - height, 8, height);
-    }
-    lcd_update();
-}
-
-static bool media_play_selected(void)
-{
-    char playlist_dir[MAX_PATH];
-
-    if (!media_count)
-        return false;
-    strlcpy(playlist_dir, media_paths[media_selected], sizeof(playlist_dir));
-    char *filename = strrchr(playlist_dir, '/');
-    if (!filename || filename == playlist_dir || !filename[1])
-        return false;
-    *filename = '\0';
-
-    /* Match Rockbox's proven audio-file path: replace the current playlist
-     * with the selected directory, then insert exactly one absolute track.
-     * Passing the MP3 as playlist_create's FILE argument would parse binary
-     * audio as a playlist and produce PLAYLIST BUFFER FULL. */
-    if (playlist_create(playlist_dir, NULL) < 0 ||
-        playlist_insert_track(NULL, media_paths[media_selected],
-                              PLAYLIST_INSERT_LAST, false, true) < 0)
-        return false;
-    playlist_start(0, 0, 0);
+        focus_pretty_name(buf, size, id3->path);
     return true;
+}
+
+/* Queue every audio file of the current folder, in list order, and start at
+ * `row` (an index into media_order) or shuffled when row < 0. */
+static bool media_play(int row)
+{
+    struct playlist_insert_context context;
+    char path[MAX_PATH];
+    int i, start = 0, index = 0;
+    bool ok = true;
+
+    if (media_files <= 0 || playlist_create(media_dir, NULL) < 0)
+        return false;
+    if (playlist_insert_context_create(NULL, &context, PLAYLIST_REPLACE,
+                                       false, false) < 0)
+        return false;
+    for (i = 0; i < media_count; i++)
+    {
+        int entry = media_order[i];
+        if (media_is_dir[entry])
+            continue;
+        if (i == row)
+            start = index;
+        entry_path(entry, path, sizeof(path));
+        if (playlist_insert_context_add(&context, path) < 0)
+        {
+            ok = false;
+            break;
+        }
+        index++;
+    }
+    playlist_insert_context_release(&context);
+    if (!ok || index == 0)
+        return false;
+    if (row < 0)
+        start = playlist_shuffle(current_tick, -1);
+    else if (global_settings.playlist_shuffle)
+        start = playlist_shuffle(current_tick, start);
+    if (start < 0)
+        start = 0;
+    playlist_start(start, 0, 0);
+    return true;
+}
+
+/* Pick up the last session where it stopped (long mixes and podcasts). */
+static bool media_resume(void)
+{
+    if (global_status.resume_index == -1 || playlist_resume() == -1)
+        return false;
+    playlist_resume_track(global_status.resume_index,
+                          global_status.resume_crc32,
+                          global_status.resume_elapsed,
+                          global_status.resume_offset);
+    return true;
+}
+
+/* ------------------------------------------------------ now playing ---- */
+
+static void time_text(char *buf, size_t size, long ms, bool negative)
+{
+    long s = ms / 1000;
+    if (s >= 3600)
+        snprintf(buf, size, "%s%ld:%02ld:%02ld", negative ? "-" : "",
+                 s / 3600, (s / 60) % 60, s % 60);
+    else
+        snprintf(buf, size, "%s%ld:%02ld", negative ? "-" : "", s / 60, s % 60);
+}
+
+static void now_playing_draw(struct mp3entry *id3, int status, long position,
+                             long since, bool loading)
+{
+    char title[MAX_PATH], header[24], text[40];
+    const char *artist = NULL;
+    long length = id3 ? (long)id3->length : 0;
+    int amount = playlist_amount();
+    int x;
+
+    if (amount > 1)
+        snprintf(header, sizeof(header), "%d / %d",
+                 playlist_get_display_index(), amount);
+    else
+        strlcpy(header, "Now Playing", sizeof(header));
+    focus_begin(header);
+
+    if (loading || !id3)
+        strlcpy(title, "Loading...", sizeof(title));
+    else if (id3->title && id3->title[0])
+        strlcpy(title, id3->title, sizeof(title));
+    else
+        focus_pretty_name(title, sizeof(title), id3->path);
+    if (id3 && !loading)
+        artist = (id3->artist && id3->artist[0]) ? id3->artist :
+                 (id3->album && id3->album[0]) ? id3->album : NULL;
+
+    focus_text_marquee(&focus_font_title, 2, artist ? 17 : 22, 124, title,
+                       since, true);
+    if (artist)
+        focus_text_marquee(&focus_font_small, 2, 35, 124, artist, since, true);
+
+    if (position > length) position = length;
+    focus_bar(2, 47, 124, 6, position, length);
+    time_text(text, sizeof(text), position, false);
+    focus_text(&focus_font_small, 2, 54, text);
+    time_text(text, sizeof(text), length - position, true);
+    focus_text_right(&focus_font_small, 126, 54, text);
+
+    x = 64 - 4;
+    if (global_settings.playlist_shuffle)
+        focus_icon_draw(FOCUS_ICON_S_SHUFFLE, x - 14, 56);
+    focus_icon_draw((status & AUDIO_STATUS_PAUSE) || !status
+                    ? FOCUS_ICON_S_PAUSE : FOCUS_ICON_S_PLAY, x, 56);
+    if (global_settings.repeat_mode != REPEAT_OFF)
+    {
+        focus_icon_draw(FOCUS_ICON_S_REPEAT, x + 13, 56);
+        if (global_settings.repeat_mode == REPEAT_ONE)
+            focus_icon_draw(FOCUS_ICON_S_ONE, x + 23, 57);
+    }
+    focus_flush();
 }
 
 void focus_now_playing(void)
 {
-    int action;
-    int startup_ticks = HZ * 3;
-    int volume_overlay_ticks = 0;
-    const char *seek_feedback = NULL;
+    long loading_until = current_tick + HZ * 5;
+    long since = current_tick;
+    long seek_pos = 0, seek_tick = 0;
+    int seek_count = 0;
+    bool seeking = false, was_ready = false;
+    char last_path[MAX_PATH] = "";
+    int generation = focus_storage_generation;
+
+#if CONFIG_TUNER
+    if (focus_radio_active())
+    {
+        focus_radio();
+        return;
+    }
+#endif
+    if (!audio_status() && !media_resume())
+    {
+        focus_message("Now Playing", "Nothing playing",
+                      "Pick something from Music");
+        sleep(HZ * 3 / 2);
+        return;
+    }
+
     while (true)
     {
         struct mp3entry *id3 = audio_current_track();
         int status = audio_status();
-        bool ready = id3 && id3->path[0];
-        if (!ready && startup_ticks <= 0)
+        bool ready = status && id3 && id3->path[0];
+        int action;
+
+        if (generation != focus_storage_generation)
+            return;
+        if (ready)
         {
-            media_draw("NOW PLAYING", "PLAYBACK ERROR");
+            was_ready = true;
+            if (strcmp(last_path, id3->path))
+            {
+                strlcpy(last_path, id3->path, sizeof(last_path));
+                since = current_tick;
+            }
+        }
+        else if (was_ready && !status)
+            return; /* playlist finished */
+        else if (TIME_AFTER(current_tick, loading_until))
+        {
+            focus_message("Now Playing", "Can't play this", NULL);
             sleep(HZ * 2);
             return;
         }
-        if (volume_overlay_ticks > 0)
-            focus_volume_overlay_draw();
-        else
-            focus_now_playing_draw(id3, status, seek_feedback, !ready);
-        if (volume_overlay_ticks > 0)
-            volume_overlay_ticks -= HZ / 4;
-        seek_feedback = NULL;
-        action = get_action(CONTEXT_CUSTOM | ALLOW_SOFTLOCK, HZ / 4);
-        if (action == ACTION_STD_MENU) return;
-        if (action == ACTION_STD_CANCEL) { default_event_handler(action); continue; }
-        if (!ready && startup_ticks > 0)
-            startup_ticks -= HZ / 4;
-        if (action == ACTION_STD_PREV) audio_prev();
-        else if (action == ACTION_STD_NEXT) audio_next();
-        else if (action == ACTION_STD_OK || action == ACTION_WPS_PLAY)
+
+        /* a held seek that never saw its release still gets committed */
+        if (seeking && TIME_AFTER(current_tick, seek_tick + HZ))
         {
-            if (status & AUDIO_STATUS_PAUSE) audio_resume();
-            else if (status & AUDIO_STATUS_PLAY) audio_pause();
-            else audio_play(0, 0);
+            audio_ff_rewind(seek_pos);
+            seeking = false;
         }
-        else if (action == ACTION_WPS_VOLUP || action == ACTION_WPS_VOLDOWN)
+        now_playing_draw(id3, status,
+                         seeking ? seek_pos : (id3 ? (long)id3->elapsed : 0),
+                         since, !ready);
+
+        action = focus_get_action(FOCUS_CTX_PLAY);
+        if (!ready && action != ACTION_STD_MENU)
+            continue;
+        switch (action)
         {
-            adjust_volume(action == ACTION_WPS_VOLUP ? 1 : -1);
-            setvol();
-            volume_overlay_ticks = HZ * 2;
-        }
-        else if (action == ACTION_WPS_SEEKBACK || action == ACTION_WPS_SEEKFWD)
+        case ACTION_STD_MENU:
+            if (seeking)
+                audio_ff_rewind(seek_pos);
+            return;
+        case ACTION_WPS_PLAY:
+            if (status & AUDIO_STATUS_PAUSE)
+                audio_resume();
+            else
+                audio_pause();
+            break;
+        case ACTION_WPS_SKIPNEXT:
+            audio_next();
+            break;
+        case ACTION_WPS_SKIPPREV:
+            if (id3->elapsed > 3000)
+            {
+                audio_pre_ff_rewind();
+                audio_ff_rewind(0);
+            }
+            else
+                audio_prev();
+            break;
+        case ACTION_WPS_SEEKBACK:
+        case ACTION_WPS_SEEKFWD:
         {
-            long newpos = id3 ? (long)id3->elapsed : 0;
-            long step = 5000;
-            newpos += action == ACTION_WPS_SEEKFWD ? step : -step;
-            if (newpos < 0) newpos = 0;
-            if (id3 && id3->length && (unsigned long)newpos > id3->length)
-                newpos = (long)id3->length;
-            audio_pre_ff_rewind();
-            audio_ff_rewind(newpos);
-            seek_feedback = action == ACTION_WPS_SEEKFWD ? "SEEK +5" : "SEEK -5";
+            long step = seek_count < 10 ? 3000 : seek_count < 25 ? 10000 : 30000;
+            if (!seeking)
+            {
+                seeking = true;
+                seek_count = 0;
+                seek_pos = (long)id3->elapsed;
+                audio_pre_ff_rewind();
+            }
+            seek_count++;
+            seek_pos += action == ACTION_WPS_SEEKFWD ? step : -step;
+            if (seek_pos < 0) seek_pos = 0;
+            if (id3->length && seek_pos > (long)id3->length - 1000)
+                seek_pos = (long)id3->length - 1000;
+            if (seek_pos < 0) seek_pos = 0;
+            seek_tick = current_tick;
+            break;
         }
-        else default_event_handler(action);
+        case ACTION_WPS_STOPSEEK:
+            if (seeking)
+            {
+                audio_ff_rewind(seek_pos);
+                seeking = false;
+            }
+            break;
+        case ACTION_WPS_CONTEXT:
+            focus_playback_options();
+            break;
+        default:
+            break;
+        }
     }
 }
 
-static void focus_media_list(const char *folder, const char *heading)
+/* ---------------------------------------------------------- browser ---- */
+
+static int browse_extra(void)
 {
-    int action;
-    if (!media_scan(folder))
+    if (media_recordings)
+        return 1;                    /* "New recording" */
+    return media_files >= 2 ? 1 : 0; /* "Shuffle all" */
+}
+
+static const char *browse_name(int index, void *ctx, char *buf, size_t size)
+{
+    int extra = browse_extra();
+    int entry;
+    (void)ctx;
+    if (index < extra)
+        return media_recordings ? "New recording" : "Shuffle all";
+    entry = media_order[index - extra];
+    if (media_is_dir[entry])
+        return entry_name(entry);
+    focus_pretty_name(buf, size, entry_name(entry));
+    return buf;
+}
+
+static int browse_icon(int index, void *ctx)
+{
+    int extra = browse_extra();
+    int entry;
+    char path[MAX_PATH];
+    struct mp3entry *id3;
+    (void)ctx;
+    if (index < extra)
+        return media_recordings ? FOCUS_ICON_S_REC : FOCUS_ICON_S_SHUFFLE;
+    entry = media_order[index - extra];
+    if (media_is_dir[entry])
+        return FOCUS_ICON_S_FOLDER;
+    id3 = audio_status() ? audio_current_track() : NULL;
+    if (id3 && id3->path[0])
     {
-        media_draw(heading, "STORAGE ERROR");
-        while ((action = get_action(CONTEXT_STD | ALLOW_SOFTLOCK, HZ / 4)) != ACTION_STD_MENU)
-            if (action == ACTION_STD_CANCEL) default_event_handler(action);
-        return;
+        entry_path(entry, path, sizeof(path));
+        if (!strcasecmp(path, id3->path))
+            return FOCUS_ICON_S_PLAY;
     }
+    return FOCUS_ICON_S_NOTE;
+}
+
+void focus_browse(const char *root, const char *title, bool recordings)
+{
+    struct focus_list list;
+    int stack[MEDIA_DEPTH];
+    int depth = 0;
+    int generation = focus_storage_generation;
+    bool found;
+
+    strlcpy(media_dir, root, sizeof(media_dir));
+    media_recordings = recordings;
+    found = media_scan();
+    focus_list_init(&list, title);
+    list.name = browse_name;
+    list.icon = browse_icon;
+    list.empty = found ? "No audio files yet" : "Folder not found";
+
     while (true)
     {
-        media_list_draw(heading);
-        action = get_action(CONTEXT_STD | ALLOW_SOFTLOCK, HZ / 4);
-        if (action == ACTION_STD_MENU) return;
-        if (action == ACTION_STD_CANCEL) { default_event_handler(action); continue; }
-        if (action == ACTION_STD_PREV && media_count)
+        int action, extra = browse_extra();
+
+        if (generation != focus_storage_generation)
         {
-            media_selected = (media_selected + media_count - 1) % media_count;
+            /* files may have changed over USB: start again from the top */
+            generation = focus_storage_generation;
+            strlcpy(media_dir, root, sizeof(media_dir));
+            depth = 0;
+            found = media_scan();
+            list.selected = list.top = 0;
+            list.empty = found ? "No audio files yet" : "Folder not found";
         }
-        else if (action == ACTION_STD_NEXT && media_count)
+        list.count = media_count + extra;
+        list.title = depth ? strrchr(media_dir, '/') + 1 : title;
+        focus_list_draw(&list);
+        focus_flush();
+
+        action = focus_get_action(FOCUS_CTX_NAV);
+        if (focus_list_input(&list, action))
+            continue;
+        if (action == ACTION_STD_MENU)
         {
-            media_selected = (media_selected + 1) % media_count;
+            char *slash;
+            if (depth == 0)
+                return;
+            slash = strrchr(media_dir, '/');
+            if (slash)
+                *slash = '\0';
+            media_scan();
+            list.selected = stack[--depth];
+            list.top = 0;
+            list.since = current_tick;
         }
-        else if (action == ACTION_STD_OK && media_count)
+        else if (action == ACTION_STD_OK && list.count > 0)
         {
-            if (media_play_selected())
+            int row = list.selected - extra;
+            if (row < 0 && recordings)
+            {
+#ifdef HAVE_RECORDING
+                focus_recording_screen();
+                media_scan();
+#endif
+            }
+            else if (row >= 0 && media_is_dir[media_order[row]])
+            {
+                if (depth < MEDIA_DEPTH &&
+                    strlen(media_dir) + strlen(entry_name(media_order[row]))
+                        + 2 < sizeof(media_dir))
+                {
+                    char name[MAX_PATH];
+                    strlcpy(name, entry_name(media_order[row]), sizeof(name));
+                    strlcat(media_dir, "/", sizeof(media_dir));
+                    strlcat(media_dir, name, sizeof(media_dir));
+                    stack[depth++] = list.selected;
+                    media_scan();
+                    list.selected = list.top = 0;
+                    list.since = current_tick;
+                }
+            }
+            else if (media_play(row))
                 focus_now_playing();
             else
-            {
-                media_draw(heading, "PLAYBACK ERROR");
-                sleep(HZ * 2);
-            }
+                focus_toast("Can't play this");
         }
-        else default_event_handler(action);
     }
-}
-
-void focus_open_music(void) { focus_media_list("/MUSIC", "MUSIC"); }
-void focus_open_podcasts(void) { focus_media_list("/PODCASTS", "PODCASTS"); }
-
-void focus_open_alarm(void)
-{
-    int action;
-#ifdef HAVE_RTC_ALARM
-    do {
-        media_draw("ALARM", "SET REMINDER");
-        action = get_action(CONTEXT_STD | ALLOW_SOFTLOCK, HZ / 4);
-        if (action == ACTION_STD_CANCEL) default_event_handler(action);
-        else if (action == ACTION_STD_OK)
-            alarm_screen();
-    } while (action != ACTION_STD_MENU);
-#else
-    media_draw("ALARM", "UNAVAILABLE");
-    sleep(HZ * 2);
-#endif
-}
-
-void focus_open_radio(void)
-{
-    int action;
-    do {
-        media_draw("RADIO", "FM READY");
-        action = get_action(CONTEXT_STD | ALLOW_SOFTLOCK, HZ / 4);
-        if (action == ACTION_STD_CANCEL) default_event_handler(action);
-        else if (action == ACTION_STD_OK)
-            /* Controlled entry to the proven tuner implementation. The
-             * custom wrapper owns the destination and returns to focus after
-             * the tuner exits; no root/plugin browser is exposed. */
-            radio_screen();
-    } while (action != ACTION_STD_MENU);
-}
-
-void focus_open_recordings(void)
-{
-    int action;
-    do {
-        media_draw("RECORDINGS", "SELECT TO OPEN");
-        action = get_action(CONTEXT_STD | ALLOW_SOFTLOCK, HZ / 4);
-        if (action == ACTION_STD_CANCEL) default_event_handler(action);
-        else if (action == ACTION_STD_OK)
-            recording_screen(false);
-    } while (action != ACTION_STD_MENU);
 }

@@ -1848,4 +1848,143 @@ void audio_beep(int duration)
     (void)duration;
 }
 
+#ifdef SANSA_CLIPPLUS
+/* ---- Clip+ focus shell recorder ----
+ * Same engine and the same start/stop sequence as recording_screen() above;
+ * only the screen and keys differ. Records the radio when it is on,
+ * otherwise the built-in microphone. */
+#include "focus_ui.h"
+
+bool focus_recording_screen(void)
+{
+    struct audio_recording_options rec_options;
+    int keyclick = global_settings.keyclick;
+    int generation = focus_storage_generation;
+    int radio_status = FMRADIO_OFF;
+    bool failed = false;
+    char text[32];
+
+#if CONFIG_TUNER
+    radio_status = get_radio_status();
+#endif
+    global_settings.rec_source =
+        radio_status != FMRADIO_OFF ? AUDIO_SRC_FMRADIO : AUDIO_SRC_MIC;
+
+    focus_message("Recorder", "Getting ready...", NULL);
+    rec_status = RCSTAT_IN_RECSCREEN;
+    global_settings.keyclick = 0;
+    talk_disable(true);
+    pm_reset_clipcount();
+    pm_activate_clipcount(false);
+    settings_apply_trigger();
+    audio_init_recording();
+    sound_set_volume(global_status.volume);
+    rec_init_recording_options(&rec_options);
+    rec_set_recording_options(&rec_options);
+    if (!strcmp(global_settings.rec_directory, "/") ||
+        dir_exists(global_settings.rec_directory) ||
+        mkdir(global_settings.rec_directory) >= 0)
+        set_gain();
+    else
+        failed = true;
+
+    while (!failed)
+    {
+        int status = audio_status();
+        bool recording = (status & AUDIO_STATUS_RECORD) != 0;
+        bool paused = (status & AUDIO_STATUS_PAUSE) != 0;
+        unsigned long seconds = audio_recorded_time() / HZ;
+        int left = 0, right = 0, action;
+
+        if (status & AUDIO_STATUS_ERROR)
+        {
+            failed = true;
+            break;
+        }
+        if (generation != focus_storage_generation)
+            break;
+
+        focus_begin(global_settings.rec_source == AUDIO_SRC_FMRADIO
+                    ? "Record radio" : "Record voice");
+        snprintf(text, sizeof(text), "%lu:%02lu", seconds / 60, seconds % 60);
+        focus_text_center(&focus_font_huge, 16, text);
+        if (recording && !paused && (current_tick / (HZ / 2)) % 2)
+            focus_icon_draw(FOCUS_ICON_S_REC, 4, 20);
+        pcm_calculate_rec_peaks(&left, &right);
+        focus_bar(8, 44, 112, 6, left > right ? left : right, 32767);
+        focus_text_center(&focus_font_small, 52,
+                          !recording ? "Select starts" :
+                          paused ? "Paused  -  HOME saves" :
+                          "Recording  -  HOME saves");
+        focus_flush();
+
+        action = focus_get_action(FOCUS_CTX_NAV);
+        switch (action)
+        {
+        case ACTION_STD_OK:
+            if (!recording)
+            {
+                rec_command(RECORDING_CMD_START);
+                rec_status |= RCSTAT_HAVE_RECORDED;
+            }
+            else
+                rec_command(paused ? RECORDING_CMD_RESUME
+                                   : RECORDING_CMD_PAUSE);
+            break;
+        case ACTION_STD_PREV:
+        case ACTION_STD_NEXT:
+#ifdef HAVE_MIC_REC
+            if (global_settings.rec_source == AUDIO_SRC_MIC)
+            {
+                global_settings.rec_mic_gain +=
+                    action == ACTION_STD_PREV ? 1 : -1;
+                set_gain();
+                snprintf(text, sizeof(text), "Mic gain %d",
+                         global_settings.rec_mic_gain);
+                focus_toast(text);
+            }
+#endif
+            break;
+        case ACTION_STD_MENU:
+            if (recording)
+            {
+                rec_command(RECORDING_CMD_STOP);
+                focus_toast("Saved");
+            }
+            else
+                goto leave;
+            break;
+        default:
+            break;
+        }
+    }
+
+leave:
+    rec_command(RECORDING_CMD_STOP);
+    audio_close_recording();
+    if (failed)
+        audio_error_clear();
+#ifdef HAVE_FMRADIO_REC
+    if (radio_status != FMRADIO_OFF)
+        rec_set_source(AUDIO_SRC_FMRADIO, (radio_status & FMRADIO_PAUSED) ?
+                           SRCF_FMRADIO_PAUSED : SRCF_FMRADIO_PLAYING);
+    else
+#endif
+        rec_set_source(AUDIO_SRC_PLAYBACK, SRCF_PLAYBACK);
+    talk_disable(false);
+    global_settings.keyclick = keyclick;
+    peak_meter_trigger(false);
+    peak_meter_set_trigger_listener(NULL);
+    rec_status &= ~RCSTAT_IN_RECSCREEN;
+    sound_settings_apply();
+    settings_save();
+    if (failed)
+    {
+        focus_message("Recorder", "Can't record", "Check free space");
+        sleep(HZ * 2);
+    }
+    return !failed;
+}
+#endif /* SANSA_CLIPPLUS */
+
 #endif /* HAVE_RECORDING */

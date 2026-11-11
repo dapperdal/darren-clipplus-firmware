@@ -176,6 +176,12 @@ bool in_radio_screen(void)
     return in_screen;
 }
 
+/* Clip+ focus shell: its own radio screen owns this flag while open. */
+void focus_radio_set_in_screen(bool on)
+{
+    in_screen = on;
+}
+
 /* Keep freq on the grid for the current region */
 int snap_freq_to_grid(int freq)
 {
