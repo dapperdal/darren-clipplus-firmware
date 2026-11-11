@@ -8,12 +8,19 @@ The Rockbox-based fork under [`rockbox/`](rockbox/) now carries a redesigned she
 that runs on a real Clip+: icon Home, folder browser, Now Playing with resume and
 accelerating seek, a full FM radio screen (seek, auto scan, saved stations, RDS
 name), five-band EQ with presets, recorder, alarm and clock editors, sleep timer
-and screen lock. Build, controls, install/rollback and the hardware checklist are
+and screen lock. The blue display area now has an original dolphin standby
+animation: a swimming pod at different depths, a close pass, and a jump. It
+starts after eight idle seconds on Home, Now Playing and radio. Any key returns
+without changing playback; Settings > Standby can disable it, and Settings /
+playback Options > Dolphins opens it immediately. USB file copying in MSC mode
+has been confirmed on the player. The latest dolphin build is installed, with
+its physical-device check still pending. Build, controls, install/rollback and the hardware checklist are
 in [HANDOFF.md](HANDOFF.md) (paths there use the local `work/rockbox-focus-fork`
 checkout, which is this repository's `rockbox/` folder).
 
 ![Home, settings and EQ](outputs/focus-v2-screens/1-home-settings-eq.png)
 ![Playback, radio and lock](outputs/focus-v2-screens/2-playback-radio-lock.png)
+![Dolphin standby captured from the firmware simulator](outputs/dolphins-screens/clipplus-dolphins.gif)
 
 The sections below describe the earlier host-simulator slice and are kept for
 history.

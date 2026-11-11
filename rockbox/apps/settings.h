@@ -717,6 +717,9 @@ struct user_settings
     int  backlight_timeout;  /* backlight off timeout:  -1=never,
                                 0=always, or time in seconds */
     bool caption_backlight; /* turn on backlight at end and start of track */
+#ifdef SANSA_CLIPPLUS
+    bool focus_dolphin_standby;
+#endif
     bool bl_filter_first_keypress;   /* filter first keypress when dark? */
 #if CONFIG_CHARGING
     int backlight_timeout_plugged;

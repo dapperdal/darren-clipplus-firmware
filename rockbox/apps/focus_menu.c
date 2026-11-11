@@ -129,6 +129,7 @@ void focus_menu(void)
 
         home_frame(selected, -1, 0);
         action = focus_get_action(FOCUS_CTX_NAV);
+        focus_standby_check(action);
         switch (action)
         {
         case ACTION_STD_PREV:
@@ -160,14 +161,14 @@ void focus_menu(void)
 /* --------------------------------------------------------- settings ---- */
 
 enum { SET_EQ, SET_SHUFFLE, SET_REPEAT, SET_SLEEP, SET_BRIGHTNESS, SET_ALARM,
-       SET_CLOCK, SET_ABOUT };
+       SET_CLOCK, SET_ABOUT, SET_STANDBY, SET_DOLPHINS };
 
 static const unsigned char settings_all[] = {
     SET_EQ, SET_SHUFFLE, SET_REPEAT, SET_SLEEP, SET_BRIGHTNESS, SET_ALARM,
-    SET_CLOCK, SET_ABOUT
+    SET_CLOCK, SET_STANDBY, SET_DOLPHINS, SET_ABOUT
 };
 static const unsigned char settings_playback[] = {
-    SET_SHUFFLE, SET_REPEAT, SET_SLEEP, SET_EQ
+    SET_SHUFFLE, SET_REPEAT, SET_SLEEP, SET_EQ, SET_DOLPHINS
 };
 #ifdef HAVE_RTC_ALARM
 static bool alarm_on;
@@ -187,7 +188,7 @@ static const char *settings_name(int index, void *ctx, char *buf, size_t size)
 {
     static const char * const names[] = {
         "Equaliser", "Shuffle", "Repeat", "Sleep timer", "Brightness",
-        "Alarm", "Set clock", "About"
+        "Alarm", "Set clock", "About", "Standby", "Dolphins"
     };
     (void)buf; (void)size;
     return names[((const unsigned char *)ctx)[index]];
@@ -197,6 +198,8 @@ static const char *settings_value(int index, void *ctx, char *buf, size_t size)
 {
     switch (((const unsigned char *)ctx)[index])
     {
+    case SET_STANDBY:
+        return global_settings.focus_dolphin_standby ? "Dolphins" : "Off";
     case SET_SHUFFLE:
         return global_settings.playlist_shuffle ? "On" : "Off";
     case SET_REPEAT:
@@ -428,6 +431,13 @@ static void settings_activate(int item)
 
     switch (item)
     {
+    case SET_STANDBY:
+        global_settings.focus_dolphin_standby =
+            !global_settings.focus_dolphin_standby;
+        break;
+    case SET_DOLPHINS:
+        focus_dolphins();
+        return;
     case SET_EQ:
         focus_eq();
         return;

@@ -427,6 +427,8 @@ void focus_radio(void)
             action = focus_get_action_timeout(FOCUS_CTX_RADIO, TIMEOUT_NOBLOCK);
         else
             action = focus_get_action_timeout(FOCUS_CTX_RADIO, HZ / 5);
+        if (!seek_dir)
+            focus_standby_check(action);
 #ifndef HAVE_NOISY_IDLE_MODE
         if (action != ACTION_NONE)
         {
