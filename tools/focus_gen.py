@@ -200,6 +200,52 @@ SMALL_ICONS = {
     "rec": [".###.", "#####", "#####", "#####", ".###."],
 }
 
+# Original 36 x 20 dolphin, facing right. The alternating belly pixels give
+# the single-colour OLED some of the depth of early OEL car-stereo displays.
+# These are our own shapes, drawn specifically for this display.
+DOLPHIN = [
+    "....................................",
+    "..................#.................",
+    ".................##.................",
+    "................###.................",
+    "...............####.................",
+    "............############............",
+    ".........##################.........",
+    ".......######################.......",
+    "......###################.####......",
+    ".....##########################.....",
+    "....###############################.",
+    "...#########++++++++++++##########..",
+    "....#######+++++++++++++######.......",
+    ".....####+++++++++++#######.........",
+    ".......###+++++########.............",
+    "..............######................",
+    "...............####.................",
+    "................###.................",
+    ".................##.................",
+    "..................#.................",
+]
+
+
+def dolphin_frame(phase):
+    im = Image.new("1", (36, 20), 0)
+    for y, row in enumerate(DOLPHIN):
+        for x, ch in enumerate(row):
+            if ch == "#" or (ch == "+" and (x + y) % 2 == 0):
+                im.putpixel((x, y), 1)
+    d = ImageDraw.Draw(im)
+    # The narrow peduncle and split horizontal flukes flex vertically.
+    tails = [
+        [(7, 11), (3, 8), (0, 3), (4, 5), (5, 7), (9, 10),
+         (5, 12), (1, 14), (2, 10)],
+        [(7, 11), (3, 10), (0, 6), (4, 7), (6, 9), (9, 11),
+         (5, 13), (0, 16), (2, 12)],
+        [(7, 11), (3, 12), (0, 10), (3, 10), (6, 11), (9, 11),
+         (6, 14), (2, 18), (2, 14)],
+    ]
+    d.polygon(tails[phase], fill=1)
+    return im
+
 
 def ascii_icon(rows):
     w = max(len(r) for r in rows)
@@ -264,6 +310,14 @@ def main():
         icons.append((name.upper(), icon((24, 24), fn)))
     for name, rows in SMALL_ICONS.items():
         icons.append(("S_" + name.upper(), ascii_icon(rows)))
+    for phase in range(3):
+        dolphin = dolphin_frame(phase)
+        icons.append((f"DOLPHIN_{phase}", dolphin))
+        icons.append((f"DOLPHIN_SMALL_{phase}", dolphin.resize((22, 12),
+                                                              Image.Resampling.NEAREST)))
+    # A pitched silhouette for the rising/falling parts of a jump.
+    icons.append(("DOLPHIN_RISE", dolphin_frame(0).rotate(25, expand=True)))
+    icons.append(("DOLPHIN_DIVE", dolphin_frame(2).rotate(-25, expand=True)))
     enum = []
     table = []
     for name, im in icons:

@@ -320,6 +320,10 @@ void focus_now_playing(void)
                          since, !ready);
 
         action = focus_get_action(FOCUS_CTX_PLAY);
+        if (!seeking && ready)
+            focus_standby_check(action);
+        if (generation != focus_storage_generation)
+            return;
         if (!ready && action != ACTION_STD_MENU)
             continue;
         switch (action)

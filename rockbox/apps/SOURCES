@@ -18,6 +18,7 @@ language.c
 main.c
 focus_assets.c
 focus_ui.c
+focus_dolphins.c
 focus_menu.c
 focus_eq.c
 focus_media.c

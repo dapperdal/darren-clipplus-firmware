@@ -1196,6 +1196,10 @@ const struct settings_list settings[] = {
 #endif
 
     /* LCD */
+#ifdef SANSA_CLIPPLUS
+    OFFON_SETTING(0, focus_dolphin_standby, LANG_DISPLAY, true,
+                  "dolphin standby", NULL),
+#endif
 #ifdef HAVE_LCD_CONTRAST
     /* its easier to leave this one un-macro()ed for the time being */
     { F_T_INT|F_DEF_ISFUNC|F_INT_SETTING, &global_settings.contrast,

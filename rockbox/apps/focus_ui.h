@@ -85,6 +85,10 @@ int  focus_get_action_timeout(int context, int timeout);
 /* Bumped whenever storage may have changed (USB session). */
 extern int focus_storage_generation;
 bool focus_display_on(void);
+/* Idle animation is checked only by Home, Now Playing and the radio screen. */
+extern long focus_last_input_tick;
+void focus_dolphins(void);
+void focus_standby_check(int action);
 
 /* ---- list ---- */
 struct focus_list

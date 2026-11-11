@@ -21,6 +21,7 @@
 #include "focus_ui.h"
 
 int focus_storage_generation;
+long focus_last_input_tick;
 
 static char toast_text[40];
 static long toast_until;
@@ -387,6 +388,8 @@ int focus_get_action_timeout(int context, int timeout)
     focus_sim_step();
 #endif
     action = get_action(context | ALLOW_SOFTLOCK, timeout);
+    if (action != ACTION_NONE)
+        focus_last_input_tick = current_tick;
     bool locked = is_keys_locked();
 
     if (locked != was_locked)

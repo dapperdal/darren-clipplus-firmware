@@ -8,17 +8,41 @@
 #include <string.h>
 #include <string-extra.h>
 #include "button.h"
+#include "audio.h"
+#include "debug.h"
 #include "dir.h"
 #include "file.h"
 #include "kernel.h"
 #include "lcd.h"
 #include "system.h"
+#include "thread.h"
+#include "settings.h"
 #include "focus_ui.h"
 
 void sim_do_exit(void) NORETURN_ATTR;
+void sim_trigger_usb(bool inserted);
 
 static char script[8192];
 static int script_pos = -1, script_len, wait_frames;
+static struct event_queue usb_test_queue;
+static long usb_test_stack[DEFAULT_STACK_SIZE / sizeof(long)];
+
+static void usb_test_thread(void)
+{
+    struct queue_event ev;
+    int delay = TIMEOUT_BLOCK;
+    while (true)
+    {
+        queue_wait_w_tmo(&usb_test_queue, &ev, delay);
+        if (ev.id == SYS_TIMEOUT)
+        {
+            sim_trigger_usb(false);
+            delay = TIMEOUT_BLOCK;
+        }
+        else
+            delay = ev.data > 0 ? ev.data : TIMEOUT_BLOCK;
+    }
+}
 
 static long button_code(const char *name)
 {
@@ -54,12 +78,18 @@ static void dump(const char *name)
         write(fd, row, sizeof(row));
     }
     close(fd);
+    DEBUGF("SIMSHOT %s audio=%d volume=%d storage=%d display=%d\n", name,
+           audio_status(), global_status.volume, focus_storage_generation,
+           focus_display_on());
 }
 
 void focus_sim_step(void)
 {
     if (script_pos < 0)
     {
+        queue_init(&usb_test_queue, false);
+        create_thread(usb_test_thread, usb_test_stack, sizeof(usb_test_stack),
+                      0, "usb-test" IF_PRIO(, PRIORITY_BACKGROUND) IF_COP(, CPU));
         int fd = open("/focus_script.txt", O_RDONLY);
         script_pos = 0;
         if (fd >= 0)
@@ -108,6 +138,14 @@ void focus_sim_step(void)
         case 's':
             dump(arg);
             break;
+        case 'U':
+            sim_trigger_usb(atoi(arg) != 0);
+            /* U 1 N unplugs after N tenths of a second even while the
+             * main thread is blocked inside the stock USB screen. */
+            queue_post(&usb_test_queue, 1,
+                       atoi(arg) != 0 && count > 0 ? count * HZ / 10 : 0);
+            wait_frames = 1;
+            return;
         case 'q':
             sim_do_exit();
         default:
