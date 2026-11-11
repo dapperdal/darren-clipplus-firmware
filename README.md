@@ -2,6 +2,22 @@
 
 An independent firmware project for the SanDisk Sansa Clip+. The first slice is a small, testable UI core and desktop simulator for the 128×64 monochrome display. It is intentionally not a Rockbox-branded build.
 
+## Focus shell v2 (November 2026)
+
+The Rockbox-based fork under [`rockbox/`](rockbox/) now carries a redesigned shell
+that runs on a real Clip+: icon Home, folder browser, Now Playing with resume and
+accelerating seek, a full FM radio screen (seek, auto scan, saved stations, RDS
+name), five-band EQ with presets, recorder, alarm and clock editors, sleep timer
+and screen lock. Build, controls, install/rollback and the hardware checklist are
+in [HANDOFF.md](HANDOFF.md) (paths there use the local `work/rockbox-focus-fork`
+checkout, which is this repository's `rockbox/` folder).
+
+![Home, settings and EQ](outputs/focus-v2-screens/1-home-settings-eq.png)
+![Playback, radio and lock](outputs/focus-v2-screens/2-playback-radio-lock.png)
+
+The sections below describe the earlier host-simulator slice and are kept for
+history.
+
 ## Current status
 
 - UI core: buildable on the host with `make`

@@ -764,6 +764,95 @@ int presets_scan(void *viewports)
 }
 
 
+/* ---- Clip+ focus shell: dialog-free preset bookkeeping ---- */
+
+void focus_presets_load(void)
+{
+    if (global_settings.fmr_file[0] && global_settings.fmr_file[0] != '-')
+        radio_load_presets(global_settings.fmr_file);
+    if (num_presets <= 0)
+        radio_load_presets("focus");
+}
+
+void focus_presets_clear(void)
+{
+    struct fmstation_buf *presets = presets_get();
+    if (presets != NULL)
+    {
+        memset(presets->fmstation, 0, sizeof(presets->fmstation));
+        presets_put(presets);
+    }
+    num_presets = 0;
+    curr_preset = -1;
+    presets_loaded = false;
+}
+
+/* Insert sorted by frequency; returns the preset index or -1 when full. */
+int focus_preset_add(int freq, const char *name)
+{
+    int i, pos = -1;
+    struct fmstation_buf *presets = presets_get();
+    if (presets == NULL)
+        return -1;
+    for (i = 0; i < num_presets; i++)
+    {
+        if (presets->fmstation[i].frequency == freq)
+        {
+            pos = i;
+            break;
+        }
+    }
+    if (pos < 0 && num_presets < MAX_PRESETS)
+    {
+        for (pos = 0; pos < num_presets; pos++)
+            if (presets->fmstation[pos].frequency > freq)
+                break;
+        memmove(&presets->fmstation[pos + 1], &presets->fmstation[pos],
+                (num_presets - pos) * sizeof(struct fmstation));
+        presets->fmstation[pos].frequency = freq;
+        strmemccpy(presets->fmstation[pos].name, name ? name : "",
+                   MAX_FMPRESET_LEN + 1);
+        num_presets++;
+        presets_loaded = true;
+    }
+    presets_put(presets);
+    return pos;
+}
+
+void focus_preset_remove(int preset)
+{
+    struct fmstation_buf *presets = presets_get();
+    if (presets == NULL)
+        return;
+    if (preset >= 0 && preset < num_presets)
+    {
+        memmove(&presets->fmstation[preset], &presets->fmstation[preset + 1],
+                (num_presets - preset - 1) * sizeof(struct fmstation));
+        num_presets--;
+        memset(&presets->fmstation[num_presets], 0, sizeof(struct fmstation));
+        if (curr_preset >= num_presets)
+            curr_preset = num_presets - 1;
+        presets_loaded = num_presets > 0;
+    }
+    presets_put(presets);
+}
+
+void focus_presets_save(void)
+{
+    struct fmstation_buf *presets = presets_get();
+    if (presets == NULL)
+        return;
+    if (presets->filepreset[0] == '\0')
+    {
+        if (!dir_exists(FMPRESET_PATH))
+            mkdir(FMPRESET_PATH);
+        snprintf(presets->filepreset, MAX_PATH, "%s/focus.fmr", FMPRESET_PATH);
+    }
+    presets_put(presets);
+    radio_save_presets();
+    settings_save();
+}
+
 void presets_save(void)
 {
     struct fmstation_buf *p = presets_get();

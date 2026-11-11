@@ -32,3 +32,4 @@
 
 # Local Git metadata for the separately managed Rockbox source checkout
 work/rockbox-focus-fork/.git
+/outputs/clipplus-focus2-update/

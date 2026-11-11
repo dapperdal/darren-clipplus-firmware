@@ -34,8 +34,7 @@
 #include "core_keymap.h"
 #include "tree.h"
 #ifdef SANSA_CLIPPLUS
-void focus_menu(void) NORETURN_ATTR;
-#include "focus_font.h"
+#include "focus_ui.h"
 #endif
 #include "filetypes.h"
 #include "panic.h"
@@ -265,9 +264,7 @@ int show_logo_boot( void )
 #ifdef SANSA_CLIPPLUS
     /* Application-level transition: keep the earliest bootloader splash
      * separate, but never show Rockbox branding once this app owns the LCD. */
-    focus_screen_header(NULL);
-    focus_big_text_centered("DARREN", 25);
-    lcd_update();
+    focus_splash("DARREN");
 #ifdef SIMULATOR
     sleep(HZ);
 #endif

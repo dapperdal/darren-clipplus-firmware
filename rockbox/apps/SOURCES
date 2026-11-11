@@ -16,10 +16,15 @@ gesture.c
 #endif
 language.c
 main.c
+focus_assets.c
+focus_ui.c
 focus_menu.c
 focus_eq.c
-focus_font.c
 focus_media.c
+focus_radio.c
+#ifdef SIMULATOR
+focus_sim.c
+#endif
 menu.c
 menus/menu_common.c
 menus/display_menu.c
